@@ -22,10 +22,12 @@ line-col = "0.2"
 pest = { git = "https://github.com/canndrew/pest", rev = "51f47bbaccea15458ad6ac3cd5421d6c9f4f6279" }
 pest_derive = { git = "https://github.com/canndrew/pest", rev = "51f47bbaccea15458ad6ac3cd5421d6c9f4f6279" }
 petgraph = "0.5"
+prettydiff = "0.5"
 sha2 = "0.9"
 smallvec = "1.7"
 source-span = "2.4"
 structopt = { version = "0.3", default-features = false, optional = true }
+sway-ir = { path = "../sway-ir" }
 sway-types = { version = "0.1.9", path = "../sway-types" }
 thiserror = "1.0"
 uuid-b64 = "0.1"

@@ -131,8 +131,7 @@ pub(crate) fn convert_expression_to_asm(
                     ConstantRegister::parse_register_name(name.as_str()).is_none(),
                     warnings,
                     name.span().clone(),
-                    Warning::ShadowingReservedRegister {
-                        reg_name: name.clone()
+                    reg_name: (*name).into()
                     }
                 );
 
