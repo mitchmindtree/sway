@@ -116,7 +116,7 @@ fn compile_constant_expression(
 }
 
 // -------------------------------------------------------------------------------------------------
-// We don't really need to compile these declarations since:
+// We don't really need to compile these declarations other than `const`s since:
 // a) function decls are inlined into their call site and can be (re)created there, though ideally
 //    we'd give them their proper name by compiling them here.
 // b) struct decls are also inlined at their instantiation site.
@@ -252,6 +252,19 @@ fn create_enum_aggregate(
         Some(name),
         vec![Type::Uint(64), Type::Union(enum_aggregate)],
     ))
+}
+
+// -------------------------------------------------------------------------------------------------
+
+fn create_tuple_aggregate(context: &mut Context, fields: Vec<TypeId>) -> Result<Aggregate, String> {
+    let field_types = fields
+        .into_iter()
+        .map(|ty_id| convert_resolved_typeid_no_span(context, &ty_id))
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let aggregate = Aggregate::new_struct(context, None, field_types);
+    // XXX add the symbols `0`, `1`, .. for the fields?
+    Ok(aggregate)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -526,9 +539,8 @@ impl FnCompiler {
                 ..
             } => Err("enum arg access".into()),
             TypedExpressionVariant::Tuple {
-                // fields: Vec<TypedExpression>,
-                ..
-            } => Err("tuples".into()),
+               fields
+            } => self.compile_tuple_expr(context, fields),
             // XXX IGNORE FOR NOW?
             TypedExpressionVariant::AbiCast { .. } => Ok(Constant::get_unit(context)),
         }
@@ -1193,6 +1205,49 @@ impl FnCompiler {
 
     // ---------------------------------------------------------------------------------------------
 
+    fn compile_tuple_expr(
+        &mut self,
+        context: &mut Context,
+        fields: Vec<TypedExpression>,
+    ) -> Result<Value, String> {
+        if fields.is_empty() {
+            // This is a Unit.  We're still debating whether Unit should just be an empty tuple in
+            // the IR or not... it is for now.
+            Ok(Constant::get_unit(context))
+        } else {
+            let (init_values, init_types): (Vec<Value>, Vec<Type>) = fields
+                .into_iter()
+                .map(|field_expr| {
+                    convert_resolved_typeid_no_span(context, &field_expr.return_type).and_then(
+                        |init_type| {
+                            self.compile_expression(context, field_expr)
+                                .map(|init_value| (init_value, init_type))
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, String>>()?
+                .into_iter()
+                .unzip();
+
+            let aggregate = Aggregate::new_struct(context, None, init_types);
+            let agg_value = Constant::get_undef(context, Type::Struct(aggregate));
+
+            Ok(init_values.into_iter().enumerate().fold(
+                agg_value,
+                |agg_value, (insert_idx, insert_val)| {
+                    self.current_block.ins(context).insert_value(
+                        agg_value,
+                        aggregate,
+                        insert_val,
+                        vec![insert_idx as u64],
+                    )
+                },
+            ))
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+
     fn compile_asm_expr(
         &mut self,
         context: &mut Context,
@@ -1331,14 +1386,14 @@ fn convert_resolved_type(context: &mut Context, ast_type: &TypeInfo) -> Result<T
             let elem_type = convert_resolved_typeid_no_span(context, elem_type_id)?;
             Type::Array(Aggregate::new_array(context, elem_type, *count as u64))
         }
-        TypeInfo::Tuple(ids) => {
-            if ids.is_empty() {
+        TypeInfo::Tuple(fields) => {
+            if fields.is_empty() {
                 // XXX We've removed Unit from the core compiler, replaced with an empty Tuple.
                 // Perhaps the same should be done for the IR, although it would use an empty
                 // aggregate which might not make as much sense as a dedicated Unit type.
                 Type::Unit
             } else {
-                return Err("can't do tuples yet".into());
+                create_tuple_aggregate(context, fields.clone()).map(Type::Struct)?
             }
         }
         TypeInfo::Custom { .. } => return Err("can't do custom types yet".into()),
