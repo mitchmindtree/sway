@@ -189,10 +189,7 @@ impl AbstractInstructionSet {
 
     /// Runs two passes -- one to get the instruction offsets of the labels
     /// and one to replace the labels in the organizational ops
-    fn realize_labels(
-        self,
-        data_section: &DataSection,
-    ) -> RealizedAbstractInstructionSet {
+    fn realize_labels(self, data_section: &DataSection) -> RealizedAbstractInstructionSet {
         let mut label_namespace: HashMap<&Label, u64> = Default::default();
         let mut counter = 0;
         for op in &self.ops {

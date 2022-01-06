@@ -18,7 +18,7 @@ use crate::{
     asm_lang::{virtual_register::*, Label, Op, VirtualImmediate12, VirtualImmediate24, VirtualOp},
     error::*,
     parse_tree::Literal,
-    BuildConfig, Ident,
+    BuildConfig,
 };
 
 //mod declaration;
@@ -33,12 +33,12 @@ use either::Either;
 pub fn compile_ir_to_asm<'sc, 'ir>(
     ir: &'ir Context,
     build_config: &BuildConfig,
-) -> CompileResult<'sc, FinalizedAsm<'sc>> {
-    let mut warnings: Vec<CompileWarning<'sc>> = Vec::new();
-    let mut errors: Vec<CompileError<'sc>> = Vec::new();
+) -> CompileResult<FinalizedAsm> {
+    let mut warnings: Vec<CompileWarning> = Vec::new();
+    let mut errors: Vec<CompileError> = Vec::new();
 
     let mut reg_seqr = RegisterSequencer::new();
-    let mut bytecode: Vec<Op<'sc>> = build_preamble(&mut reg_seqr).to_vec();
+    let mut bytecode: Vec<Op> = build_preamble(&mut reg_seqr).to_vec();
 
     // Eventually when we get this 'correct' with no hacks we'll want to compile all the modules
     // separately and then use a linker to connect them.  This way we could also keep binary caches
@@ -92,7 +92,7 @@ fn compile_module_to_asm<'sc, 'ir>(
     reg_seqr: RegisterSequencer,
     context: &'ir Context,
     module: Module,
-) -> CompileResult<'sc, (DataSection<'sc>, Vec<Op<'sc>>, RegisterSequencer)> {
+) -> CompileResult<(DataSection, Vec<Op>, RegisterSequencer)> {
     let mut builder = AsmBuilder::new(DataSection::default(), reg_seqr, context);
     match module.get_kind(context) {
         Kind::Script => {
@@ -160,9 +160,9 @@ macro_rules! size_bytes_round_up_to_word_alignment {
     };
 }
 
-struct AsmBuilder<'sc, 'ir> {
+struct AsmBuilder<'ir> {
     // Data section is used by the rest of code gen to layout const memory.
-    data_section: DataSection<'sc>,
+    data_section: DataSection,
 
     // Register sequencer dishes out new registers and labels.
     reg_seqr: RegisterSequencer,
@@ -185,7 +185,7 @@ struct AsmBuilder<'sc, 'ir> {
     context: &'ir Context,
 
     // Final resulting VM bytecode ops.
-    bytecode: Vec<Op<'sc>>,
+    bytecode: Vec<Op>,
 }
 
 struct FieldLayout {
@@ -204,12 +204,15 @@ pub(super) enum Storage {
     Stack(u64), // Storage in the runtime stack starting at an absolute word offset.  Essentially a global.
 }
 
-impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
-    fn new(
-        data_section: DataSection<'sc>,
-        reg_seqr: RegisterSequencer,
-        context: &'ir Context,
-    ) -> Self {
+impl<'ir> AsmBuilder<'ir> {
+    fn empty_span() -> crate::span::Span {
+        crate::span::Span {
+            span: pest::Span::new(" ".into(), 0, 0).unwrap(),
+            path: None,
+        }
+    }
+
+    fn new(data_section: DataSection, reg_seqr: RegisterSequencer, context: &'ir Context) -> Self {
         AsmBuilder {
             data_section,
             reg_seqr,
@@ -294,20 +297,10 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
             self.bytecode.push(Op::register_move(
                 base_reg.clone(),
                 VirtualRegister::Constant(ConstantRegister::StackPointer),
-                crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                    path: None,
-                },
+                Self::empty_span(),
             ));
             self.bytecode.push(Op::unowned_stack_allocate_memory(
-                VirtualImmediate24::new(
-                    stack_base * 8,
-                    crate::span::Span {
-                        span: pest::Span::new(" ", 0, 0).unwrap(),
-                        path: None,
-                    },
-                )
-                .unwrap(),
+                VirtualImmediate24::new(stack_base * 8, Self::empty_span()).unwrap(),
             ));
             self.stack_base_reg = Some(base_reg);
         }
@@ -316,29 +309,19 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
     fn add_block_label(&mut self, block: Block) {
         if &block.get_label(self.context) != "entry" {
             let label = self.block_to_label(&block);
-            self.bytecode.push(Op::jump_label(
-                label,
-                crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                    path: None,
-                },
-            ))
+            self.bytecode
+                .push(Op::jump_label(label, Self::empty_span()))
         }
     }
 
     fn add_label(&mut self) -> Label {
         let label = self.reg_seqr.get_label();
-        self.bytecode.push(Op::jump_label(
-            label.clone(),
-            crate::span::Span {
-                span: pest::Span::new(" ", 0, 0).unwrap(),
-                path: None,
-            },
-        ));
+        self.bytecode
+            .push(Op::jump_label(label.clone(), Self::empty_span()));
         label
     }
 
-    fn finalize(self) -> CompileResult<'sc, (DataSection<'sc>, Vec<Op<'sc>>, RegisterSequencer)> {
+    fn finalize(self) -> CompileResult<(DataSection, Vec<Op>, RegisterSequencer)> {
         ok(
             (self.data_section, self.bytecode, self.reg_seqr),
             Vec::new(),
@@ -346,7 +329,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
         )
     }
 
-    fn compile_function(&mut self, function: Function) -> CompileResult<'sc, ()> {
+    fn compile_function(&mut self, function: Function) -> CompileResult<()> {
         // Compile instructions.
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
@@ -365,7 +348,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
         ok((), warnings, errors)
     }
 
-    fn compile_instruction(&mut self, block: &Block, instr_val: &Value) -> CompileResult<'sc, ()> {
+    fn compile_instruction(&mut self, block: &Block, instr_val: &Value) -> CompileResult<()> {
         let mut warnings = Vec::new();
         let mut errors = Vec::new();
         if let ValueContent::Instruction(instruction) = &self.context.values[instr_val.0] {
@@ -382,10 +365,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 Instruction::Call(..) => {
                     errors.push(CompileError::Internal(
                         "Calls are not yet supported.",
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
+                        Self::empty_span(),
                     ));
                     return err(warnings, errors);
                 }
@@ -425,10 +405,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
         } else {
             errors.push(CompileError::Internal(
                 "Value not an instruction.",
-                crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                    path: None,
-                },
+                Self::empty_span(),
             ));
         }
         ok((), warnings, errors)
@@ -444,19 +421,16 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
         instr_val: &Value,
         asm: &AsmBlock,
         asm_args: &[AsmArg],
-    ) -> CompileResult<'sc, ()> {
-        let mut warnings: Vec<CompileWarning<'sc>> = Vec::new();
-        let mut errors: Vec<CompileError<'sc>> = Vec::new();
+    ) -> CompileResult<()> {
+        let mut warnings: Vec<CompileWarning> = Vec::new();
+        let mut errors: Vec<CompileError> = Vec::new();
         let mut inline_reg_map = HashMap::new();
         let mut inline_ops = Vec::new();
         for AsmArg { name, initializer } in asm_args {
             assert_or_warn!(
                 ConstantRegister::parse_register_name(name).is_none(),
                 warnings,
-                crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                    path: None,
-                },
+                Self::empty_span(),
                 Warning::ShadowingReservedRegister {
                     reg_name: name.into()
                 }
@@ -482,10 +456,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 .iter()
                 .map(|reg_name| -> Result<_, CompileError> {
                     realize_register(reg_name).ok_or_else(|| CompileError::UnknownRegister {
-                        span: crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
+                        span: Self::empty_span(),
                         initialized_registers: inline_reg_map
                             .iter()
                             .map(|(name, _)| (*name).clone())
@@ -506,16 +477,13 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
             // XXX TODO: This 'unchecked' version is here because it was too hard to resolve
             // borrowing the errors from `Op::parse_opcode()` as 'sc.  This needs to be fixed
             // somehow, maybe with just static spans (COMING SOON!) or maybe static errors.
+            // XXX Static spans are in, but using Ident is painful since it's wrapped around a Span
+            // now.
             let opcode = Op::parse_opcode_unchecked(
                 &op.name,
                 replaced_registers,
-                op.immediate.as_ref().map(|imm_str| Ident {
-                    primary_name: imm_str,
-                    span: crate::span::Span {
-                        span: pest::Span::new(" ", 0, 0).unwrap(),
-                        path: None,
-                    },
-                }),
+                op.immediate.as_ref(),
+                Self::empty_span(),
             );
 
             inline_ops.push(Op {
@@ -533,10 +501,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 Some(reg) => reg,
                 None => {
                     errors.push(CompileError::UnknownRegister {
-                        span: crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
+                        span: Self::empty_span(),
                         initialized_registers: inline_reg_map
                             .iter()
                             .map(|(name, _)| name.to_string())
@@ -594,14 +559,8 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
         if let Some(local_val) = to_block.get_phi_val_coming_from(self.context, from_block) {
             let local_reg = self.value_to_register(&local_val);
             let phi_reg = self.value_to_register(&to_block.get_phi(self.context));
-            self.bytecode.push(Op::register_move(
-                phi_reg,
-                local_reg,
-                crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                    path: None,
-                },
-            ));
+            self.bytecode
+                .push(Op::register_move(phi_reg, local_reg, Self::empty_span()));
         }
     }
 
@@ -654,14 +613,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::MULI(
                     instr_reg.clone(),
                     index_reg,
-                    VirtualImmediate12::new(
-                        elem_size,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(elem_size, Self::empty_span()).unwrap(),
                 )),
                 comment: "extract_element relative offset".into(),
                 owning_span: None,
@@ -697,14 +649,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::LW(
                     instr_reg.clone(),
                     base_reg,
-                    VirtualImmediate12::new(
-                        extract_offset,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(extract_offset, Self::empty_span()).unwrap(),
                 )),
                 comment: format!(
                     "extract_value @ {}",
@@ -722,14 +667,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: either::Either::Left(VirtualOp::ADDI(
                     instr_reg.clone(),
                     base_reg,
-                    VirtualImmediate12::new(
-                        extract_offset * 8,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(extract_offset * 8, Self::empty_span()).unwrap(),
                 )),
                 comment: "extract address".into(),
                 owning_span: None,
@@ -757,14 +695,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                         opcode: either::Either::Left(VirtualOp::ADDI(
                             instr_reg.clone(),
                             self.stack_base_reg.as_ref().unwrap().clone(),
-                            VirtualImmediate12::new(
-                                *word_offs * 8,
-                                crate::span::Span {
-                                    span: pest::Span::new(" ", 0, 0).unwrap(),
-                                    path: None,
-                                },
-                            )
-                            .unwrap(),
+                            VirtualImmediate12::new(*word_offs * 8, Self::empty_span()).unwrap(),
                         )),
                         comment: "get_ptr".into(),
                         owning_span: None,
@@ -827,14 +758,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::MULI(
                     elem_index_offs_reg.clone(),
                     index_reg,
-                    VirtualImmediate12::new(
-                        elem_size,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(elem_size, Self::empty_span()).unwrap(),
                 )),
                 comment: "insert_element relative offset".into(),
                 owning_span: None,
@@ -852,14 +776,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::MCPI(
                     elem_index_offs_reg,
                     insert_reg,
-                    VirtualImmediate12::new(
-                        elem_size,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(elem_size, Self::empty_span()).unwrap(),
                 )),
                 comment: "insert_element store value".into(),
                 owning_span: None,
@@ -890,14 +807,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::SW(
                     base_reg.clone(),
                     insert_reg,
-                    VirtualImmediate12::new(
-                        insert_offs,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(insert_offs, Self::empty_span()).unwrap(),
                 )),
                 comment: format!(
                     "insert_value @ {}",
@@ -915,14 +825,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: either::Either::Left(VirtualOp::ADDI(
                     offs_reg.clone(),
                     base_reg.clone(),
-                    VirtualImmediate12::new(
-                        insert_offs * 8,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(insert_offs * 8, Self::empty_span()).unwrap(),
                 )),
                 comment: "insert_value get offset".into(),
                 owning_span: None,
@@ -931,14 +834,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                 opcode: Either::Left(VirtualOp::MCPI(
                     offs_reg,
                     insert_reg,
-                    VirtualImmediate12::new(
-                        value_size,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
-                    )
-                    .unwrap(),
+                    VirtualImmediate12::new(value_size, Self::empty_span()).unwrap(),
                 )),
                 comment: "insert_value store value".into(),
                 owning_span: None,
@@ -968,10 +864,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                     self.bytecode.push(Op::register_move(
                         instr_reg.clone(),
                         var_reg.clone(),
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
+                        Self::empty_span(),
                     ));
                 }
                 Storage::Stack(word_offs) => {
@@ -982,14 +875,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                             opcode: Either::Left(VirtualOp::LW(
                                 instr_reg.clone(),
                                 self.stack_base_reg.as_ref().unwrap().clone(),
-                                VirtualImmediate12::new(
-                                    *word_offs,
-                                    crate::span::Span {
-                                        span: pest::Span::new(" ", 0, 0).unwrap(),
-                                        path: None,
-                                    },
-                                )
-                                .unwrap(),
+                                VirtualImmediate12::new(*word_offs, Self::empty_span()).unwrap(),
                             )),
                             comment: "load value".into(),
                             owning_span: None,
@@ -1001,14 +887,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                             opcode: either::Either::Left(VirtualOp::ADDI(
                                 instr_reg.clone(),
                                 self.stack_base_reg.as_ref().unwrap().clone(),
-                                VirtualImmediate12::new(
-                                    word_offs * 8,
-                                    crate::span::Span {
-                                        span: pest::Span::new(" ", 0, 0).unwrap(),
-                                        path: None,
-                                    },
-                                )
-                                .unwrap(),
+                                VirtualImmediate12::new(word_offs * 8, Self::empty_span()).unwrap(),
                             )),
                             comment: "load address".into(),
                             owning_span: None,
@@ -1077,10 +956,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                     self.bytecode.push(Op::register_move(
                         reg.clone(),
                         stored_reg,
-                        crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                            path: None,
-                        },
+                        Self::empty_span(),
                     ));
                 }
                 Storage::Stack(word_offs) => {
@@ -1114,14 +990,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                                 opcode: Either::Left(VirtualOp::SW(
                                     self.stack_base_reg.as_ref().unwrap().clone(),
                                     stored_reg,
-                                    VirtualImmediate12::new(
-                                        word_offs,
-                                        crate::span::Span {
-                                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                                            path: None,
-                                        },
-                                    )
-                                    .unwrap(),
+                                    VirtualImmediate12::new(word_offs, Self::empty_span()).unwrap(),
                                 )),
                                 comment: "store value".into(),
                                 owning_span: None,
@@ -1134,14 +1003,8 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                                 opcode: either::Either::Left(VirtualOp::ADDI(
                                     dest_reg.clone(),
                                     self.stack_base_reg.as_ref().unwrap().clone(),
-                                    VirtualImmediate12::new(
-                                        word_offs * 8,
-                                        crate::span::Span {
-                                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                                            path: None,
-                                        },
-                                    )
-                                    .unwrap(),
+                                    VirtualImmediate12::new(word_offs * 8, Self::empty_span())
+                                        .unwrap(),
                                 )),
                                 comment: "store get offset".into(),
                                 owning_span: None,
@@ -1153,10 +1016,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                                     stored_reg,
                                     VirtualImmediate12::new(
                                         store_size_in_words * 8,
-                                        crate::span::Span {
-                                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                                            path: None,
-                                        },
+                                        Self::empty_span(),
                                     )
                                     .unwrap(),
                                 )),
@@ -1196,21 +1056,12 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                                     self.bytecode.push(Op::register_move(
                                         start_reg.clone(),
                                         VirtualRegister::Constant(ConstantRegister::StackPointer),
-                                        crate::span::Span {
-                                            span: pest::Span::new(" ", 0, 0).unwrap(),
-                                            path: None,
-                                        },
+                                        Self::empty_span(),
                                     ));
 
                                     self.bytecode.push(Op::unowned_stack_allocate_memory(
-                                        VirtualImmediate24::new(
-                                            total_size,
-                                            crate::span::Span {
-                                                span: pest::Span::new(" ", 0, 0).unwrap(),
-                                                path: None,
-                                            },
-                                        )
-                                        .unwrap(),
+                                        VirtualImmediate24::new(total_size, Self::empty_span())
+                                            .unwrap(),
                                     ));
 
                                     // Fill in the fields.
@@ -1317,14 +1168,7 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
                     opcode: Either::Left(VirtualOp::SW(
                         start_reg.clone(),
                         init_reg,
-                        VirtualImmediate12::new(
-                            offs_in_words,
-                            crate::span::Span {
-                                span: pest::Span::new(" ", 0, 0).unwrap(),
-                                path: None,
-                            },
-                        )
-                        .unwrap(),
+                        VirtualImmediate12::new(offs_in_words, Self::empty_span()).unwrap(),
                     )),
                     comment: format!(
                         "initialise aggregate field at stack offset {}",
@@ -1473,16 +1317,22 @@ impl<'sc, 'ir> AsmBuilder<'sc, 'ir> {
     }
 }
 
-fn ir_constant_to_ast_literal<'sc>(constant: &Constant) -> Literal<'sc> {
+fn ir_constant_to_ast_literal(constant: &Constant) -> Literal {
     match &constant.value {
         ConstantValue::Undef => unreachable!("Cannot convert 'undef' to a literal."),
         ConstantValue::Unit => Literal::U64(0), // No unit.
         ConstantValue::Bool(b) => Literal::Boolean(*b),
         ConstantValue::Uint(n) => Literal::U64(*n),
         ConstantValue::B256(bs) => Literal::B256(*bs),
-        ConstantValue::String(_) => {
-            Literal::String("STRINGS ARE UNIMPLEMENTED UNTIL WE CAN GET AROUND 'sc")
-        }
+        ConstantValue::String(_) => Literal::String(crate::span::Span {
+            span: pest::Span::new(
+                "STRINGS ARE UNIMPLEMENTED UNTIL WE REDO DATASECTION".into(),
+                0,
+                51,
+            )
+            .unwrap(),
+            path: None,
+        }),
         ConstantValue::Array(_) => unimplemented!(),
         ConstantValue::Struct(_) => unimplemented!(),
     }

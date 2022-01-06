@@ -427,7 +427,7 @@ pub enum CompileError {
         "Internal compiler error: {0}\nPlease file an issue on the repository and include the \
          code that triggered this error."
     )]
-    InternalOwned(String, Span<'sc>),
+    InternalOwned(String, Span),
     #[error("Unimplemented feature: {0:?}")]
     UnimplementedRule(Rule, Span),
     #[error(

@@ -45,11 +45,11 @@ pub(crate) fn compile_ast(ast: TypedParseTree) -> Result<Context, String> {
 
 // -------------------------------------------------------------------------------------------------
 
-fn compile_script<'sc>(
+fn compile_script(
     context: &mut Context,
-    main_function: TypedFunctionDeclaration<'sc>,
-    namespace: Namespace<'sc>,
-    declarations: Vec<TypedDeclaration<'sc>>,
+    main_function: TypedFunctionDeclaration,
+    namespace: Namespace,
+    declarations: Vec<TypedDeclaration>,
 ) -> Result<Module, String> {
     let module = Module::new(context, Kind::Script, "script");
 
@@ -60,10 +60,10 @@ fn compile_script<'sc>(
     Ok(module)
 }
 
-fn compile_contract<'sc>(
+fn compile_contract(
     context: &mut Context,
-    abi_entries: Vec<TypedFunctionDeclaration<'sc>>,
-    declarations: Vec<TypedDeclaration<'sc>>,
+    abi_entries: Vec<TypedFunctionDeclaration>,
+    declarations: Vec<TypedDeclaration>,
 ) -> Result<Module, String> {
     let module = Module::new(context, Kind::Contract, "contract");
 
@@ -77,10 +77,10 @@ fn compile_contract<'sc>(
 
 // -------------------------------------------------------------------------------------------------
 
-fn compile_constants<'sc>(
+fn compile_constants(
     context: &mut Context,
     module: Module,
-    namespace: &Namespace<'sc>,
+    namespace: &Namespace,
     public_only: bool,
 ) -> Result<(), String> {
     for decl in namespace.get_all_declared_symbols() {
@@ -92,7 +92,7 @@ fn compile_constants<'sc>(
         {
             if !public_only || matches!(visibility, Visibility::Public) {
                 let const_val = compile_constant_expression(context, value)?;
-                module.add_global_constant(context, name.primary_name.to_owned(), const_val);
+                module.add_global_constant(context, name.as_str().to_owned(), const_val);
             }
         }
     }
@@ -104,9 +104,9 @@ fn compile_constants<'sc>(
     Ok(())
 }
 
-fn compile_constant_expression<'sc>(
+fn compile_constant_expression(
     context: &mut Context,
-    const_expr: &TypedExpression<'sc>,
+    const_expr: &TypedExpression,
 ) -> Result<Value, String> {
     if let TypedExpressionVariant::Literal(literal) = &const_expr.expression {
         Ok(convert_literal_to_value(context, literal))
@@ -136,7 +136,7 @@ fn compile_declarations(
             TypedDeclaration::ConstantDeclaration(decl) => {
                 // These are in the global scope for the module, so they can be added there.
                 let const_val = compile_constant_expression(context, &decl.value)?;
-                module.add_global_constant(context, decl.name.primary_name.to_owned(), const_val);
+                module.add_global_constant(context, decl.name.as_str().to_owned(), const_val);
             }
 
             TypedDeclaration::FunctionDeclaration(decl) => compile_function(context, module, decl)?,
@@ -208,7 +208,7 @@ fn compile_enum_decl(
 
     create_enum_aggregate(
         context,
-        name.primary_name.to_owned(),
+        name.as_str().to_owned(),
         variants
             .into_iter()
             .map(|tev| tev.as_owned_typed_enum_variant())
@@ -271,7 +271,7 @@ fn compile_function(
             .iter()
             .map(|param| {
                 convert_resolved_typeid(context, &param.r#type, &param.type_span)
-                    .map(|ty| (param.name.primary_name.into(), ty))
+                    .map(|ty| (param.name.as_str().into(), ty))
             })
             .collect::<Result<Vec<(String, Type)>, String>>()?;
 
@@ -301,7 +301,7 @@ fn compile_fn_with_args(
     let func = Function::new(
         context,
         module,
-        name.primary_name.to_owned(),
+        name.as_str().to_owned(),
         args,
         ret_type,
         selector,
@@ -328,12 +328,12 @@ fn compile_impl(
             .parameters
             .iter()
             .map(|param| {
-                if param.name.primary_name == "self" {
+                if param.name.as_str() == "self" {
                     convert_resolved_type(context, &self_type)
                 } else {
                     convert_resolved_typeid(context, &param.r#type, &param.type_span)
                 }
-                .map(|ty| (param.name.primary_name.into(), ty))
+                .map(|ty| (param.name.as_str().into(), ty))
             })
             .collect::<Result<Vec<(String, Type)>, String>>()?;
 
@@ -351,7 +351,7 @@ fn compile_abi_method(
 ) -> Result<(), String> {
     let selector = ast_fn_decl.to_fn_selector_value().value.ok_or(format!(
         "Cannot generate selector for ABI method: {}",
-        ast_fn_decl.name.primary_name
+        ast_fn_decl.name.as_str()
     ))?;
 
     let args = ast_fn_decl
@@ -359,7 +359,7 @@ fn compile_abi_method(
         .iter()
         .map(|param| {
             convert_resolved_typeid(context, &param.r#type, &param.type_span)
-                .map(|ty| (param.name.primary_name.into(), ty))
+                .map(|ty| (param.name.as_str().into(), ty))
         })
         .collect::<Result<Vec<(String, Type)>, String>>()?;
 
@@ -375,7 +375,7 @@ struct FnCompiler {
     symbol_map: HashMap<String, String>,
 }
 
-impl<'sc> FnCompiler {
+impl FnCompiler {
     fn new(context: &mut Context, module: Module, function: Function) -> Self {
         let symbol_map = HashMap::from_iter(
             function
@@ -395,7 +395,7 @@ impl<'sc> FnCompiler {
     fn compile_code_block(
         &mut self,
         context: &mut Context,
-        ast_block: TypedCodeBlock<'sc>,
+        ast_block: TypedCodeBlock,
     ) -> Result<Value, String> {
         ast_block
             .contents
@@ -458,7 +458,7 @@ impl<'sc> FnCompiler {
     fn compile_expression(
         &mut self,
         context: &mut Context,
-        ast_expr: TypedExpression<'sc>,
+        ast_expr: TypedExpression,
     ) -> Result<Value, String> {
         match ast_expr.expression {
             TypedExpressionVariant::Literal(l) => Ok(convert_literal_to_value(context, &l)),
@@ -469,7 +469,7 @@ impl<'sc> FnCompiler {
                 ..
             } => self.compile_fn_call(
                 context,
-                name.suffix.primary_name,
+                name.suffix.as_str(),
                 arguments,
                 Some(function_body),
             ),
@@ -477,9 +477,8 @@ impl<'sc> FnCompiler {
                 self.compile_lazy_op(context, op, *lhs, *rhs)
             }
             TypedExpressionVariant::VariableExpression { name } => {
-                self.compile_var_expr(context, name.primary_name)
+                self.compile_var_expr(context, name.as_str())
             }
-            TypedExpressionVariant::Unit => Ok(Constant::get_unit(context)),
             TypedExpressionVariant::Array { contents } => {
                 self.compile_array_expr(context, contents)
             }
@@ -489,7 +488,7 @@ impl<'sc> FnCompiler {
             TypedExpressionVariant::StructExpression {
                 struct_name,
                 fields,
-            } => self.compile_struct_expr(context, struct_name.primary_name, fields),
+            } => self.compile_struct_expr(context, struct_name.as_str(), fields),
             TypedExpressionVariant::CodeBlock(cb) => self.compile_code_block(context, cb),
             TypedExpressionVariant::FunctionParameter => Err("expr func param".into()),
             TypedExpressionVariant::IfExp {
@@ -521,11 +520,15 @@ impl<'sc> FnCompiler {
                 ..
             } => self.compile_enum_expr(context, enum_decl, tag, contents),
             TypedExpressionVariant::EnumArgAccess {
-                //Prefix: Box<TypedExpression<'sc>>,
+                //Prefix: Box<TypedExpression>,
                 //Arg_num_to_access: usize,
                 //Resolved_type_of_parent: TypeId,
                 ..
             } => Err("enum arg access".into()),
+            TypedExpressionVariant::Tuple {
+                // fields: Vec<TypedExpression>,
+                ..
+            } => Err("tuples".into()),
             // XXX IGNORE FOR NOW?
             TypedExpressionVariant::AbiCast { .. } => Ok(Constant::get_unit(context)),
         }
@@ -536,7 +539,7 @@ impl<'sc> FnCompiler {
     fn compile_return_statement(
         &mut self,
         context: &mut Context,
-        ast_expr: TypedExpression<'sc>,
+        ast_expr: TypedExpression,
     ) -> Result<Value, String> {
         let ret_value = self.compile_expression(context, ast_expr)?;
         match ret_value.get_type(context) {
@@ -557,8 +560,8 @@ impl<'sc> FnCompiler {
         &mut self,
         context: &mut Context,
         ast_op: LazyOp,
-        ast_lhs: TypedExpression<'sc>,
-        ast_rhs: TypedExpression<'sc>,
+        ast_lhs: TypedExpression,
+        ast_rhs: TypedExpression,
     ) -> Result<Value, String> {
         // Short-circuit: if LHS is true for AND we still must eval the RHS block; for OR we can
         // skip the RHS block, and vice-versa.
@@ -591,8 +594,8 @@ impl<'sc> FnCompiler {
         &mut self,
         context: &mut Context,
         ast_name: &str,
-        ast_args: Vec<(Ident<'sc>, TypedExpression<'sc>)>,
-        callee_body: Option<TypedCodeBlock<'sc>>,
+        ast_args: Vec<(Ident, TypedExpression)>,
+        callee_body: Option<TypedCodeBlock>,
     ) -> Result<Value, String> {
         // XXX To do: Calling into other modules, managing namespaces.
         //
@@ -627,13 +630,16 @@ impl<'sc> FnCompiler {
             None => {
                 // Firstly create the single-use callee by fudging an AST declaration.
                 let callee_name = context.get_unique_name();
-                let callee_ident = Ident {
-                    primary_name: &callee_name,
-                    span: crate::span::Span {
-                        span: pest::Span::new(" ", 0, 0).unwrap(),
-                        path: None,
-                    },
-                };
+                let callee_name_len = callee_name.len();
+                let callee_ident = Ident::new(crate::span::Span {
+                    span: pest::Span::new(
+                        std::sync::Arc::from(callee_name.clone()),
+                        0,
+                        callee_name_len,
+                    )
+                    .unwrap(),
+                    path: None,
+                });
 
                 let parameters = ast_args
                     .iter()
@@ -641,7 +647,7 @@ impl<'sc> FnCompiler {
                         name: name.clone(),
                         r#type: expr.return_type,
                         type_span: crate::span::Span {
-                            span: pest::Span::new(" ", 0, 0).unwrap(),
+                            span: pest::Span::new(" ".into(), 0, 0).unwrap(),
                             path: None,
                         },
                     })
@@ -656,20 +662,20 @@ impl<'sc> FnCompiler {
                     // seen it happen (whether it's 'valid' or not) is in std::storage::store(),
                     // which has a single asm block which also returns nothing.  In this case, it
                     // actually is Unit.
-                    insert_type(TypeInfo::Unit));
+                    insert_type(TypeInfo::Tuple(Vec::new())));
 
                 let callee_fn_decl = TypedFunctionDeclaration {
                     name: callee_ident,
                     body: callee_body.clone(),
                     parameters,
                     span: crate::span::Span {
-                        span: pest::Span::new(" ", 0, 0).unwrap(),
+                        span: pest::Span::new(" ".into(), 0, 0).unwrap(),
                         path: None,
                     },
                     return_type,
                     type_parameters: Vec::new(),
                     return_type_span: crate::span::Span {
-                        span: pest::Span::new(" ", 0, 0).unwrap(),
+                        span: pest::Span::new(" ".into(), 0, 0).unwrap(),
                         path: None,
                     },
                     visibility: Visibility::Private,
@@ -685,9 +691,9 @@ impl<'sc> FnCompiler {
         }
     }
 
-    fn get_codeblock_return_type(codeblock: &TypedCodeBlock<'sc>) -> Option<TypeId> {
+    fn get_codeblock_return_type(codeblock: &TypedCodeBlock) -> Option<TypeId> {
         if codeblock.contents.is_empty() {
-            Some(insert_type(TypeInfo::Unit))
+            Some(insert_type(TypeInfo::Tuple(Vec::new())))
         } else {
             codeblock
                 .contents
@@ -705,9 +711,9 @@ impl<'sc> FnCompiler {
     fn compile_if(
         &mut self,
         context: &mut Context,
-        ast_condition: TypedExpression<'sc>,
-        ast_then: TypedExpression<'sc>,
-        ast_else: Option<Box<TypedExpression<'sc>>>,
+        ast_condition: TypedExpression,
+        ast_then: TypedExpression,
+        ast_else: Option<Box<TypedExpression>>,
     ) -> Result<Value, String> {
         // Compile the condition expression in the entry block.  Then save the current block so we
         // can jump to the true and false blocks after we've created them.
@@ -764,7 +770,7 @@ impl<'sc> FnCompiler {
     fn compile_while_loop(
         &mut self,
         context: &mut Context,
-        ast_while_loop: TypedWhileLoop<'sc>,
+        ast_while_loop: TypedWhileLoop,
     ) -> Result<Value, String> {
         // We're dancing around a bit here to make the blocks sit in the right order.  Ideally we
         // have the cond block, followed by the body block which may contain other blocks, and the
@@ -831,7 +837,7 @@ impl<'sc> FnCompiler {
     fn compile_var_decl(
         &mut self,
         context: &mut Context,
-        ast_var_decl: TypedVariableDeclaration<'sc>,
+        ast_var_decl: TypedVariableDeclaration,
     ) -> Result<Value, String> {
         let TypedVariableDeclaration {
             name,
@@ -845,10 +851,10 @@ impl<'sc> FnCompiler {
         let return_type = convert_resolved_typeid(context, &body.return_type, &body.span)?;
         let init_val = self.compile_expression(context, body)?;
 
-        let local_name = match self.symbol_map.get(name.primary_name) {
+        let local_name = match self.symbol_map.get(name.as_str()) {
             None => {
                 // Haven't seen this name before.  Use it as-is.
-                name.primary_name.to_owned()
+                name.as_str().to_owned()
             }
             Some(shadowed_name) => {
                 // Seen before, and this is shadowing the old one.  Update to a new name.
@@ -856,7 +862,7 @@ impl<'sc> FnCompiler {
             }
         };
         self.symbol_map
-            .insert(name.primary_name.to_owned(), local_name.clone());
+            .insert(name.as_str().to_owned(), local_name.clone());
 
         let ptr =
             self.function
@@ -871,20 +877,16 @@ impl<'sc> FnCompiler {
     fn compile_const_decl(
         &mut self,
         context: &mut Context,
-        ast_const_decl: TypedConstantDeclaration<'sc>,
+        ast_const_decl: TypedConstantDeclaration,
     ) -> Result<Value, String> {
         // This is local to the function, so we add it to the locals, rather than the module
         // globals like other const decls.
-        let TypedConstantDeclaration {
-            name,  //: Ident<'sc>,
-            value, //: TypedExpression<'sc>,
-            ..
-        } = ast_const_decl;
+        let TypedConstantDeclaration { name, value, .. } = ast_const_decl;
 
         if let TypedExpressionVariant::Literal(literal) = &value.expression {
             let initialiser = convert_literal_to_constant(literal);
             let return_type = convert_resolved_typeid(context, &value.return_type, &value.span)?;
-            let name = name.primary_name.to_owned();
+            let name = name.as_str().to_owned();
             self.function.new_local_ptr(
                 context,
                 name.clone(),
@@ -909,9 +911,9 @@ impl<'sc> FnCompiler {
     fn compile_reassignment(
         &mut self,
         context: &mut Context,
-        ast_reassignment: TypedReassignment<'sc>,
+        ast_reassignment: TypedReassignment,
     ) -> Result<Value, String> {
-        let name = ast_reassignment.lhs[0].name.primary_name;
+        let name = ast_reassignment.lhs[0].name.as_str();
         let ptr_val = self
             .function
             .get_local_ptr(context, name)
@@ -935,11 +937,11 @@ impl<'sc> FnCompiler {
                             Type::Struct(aggregate) => {
                                 // Get the field index and also its type for the next iteration.
                                 match context
-                                    .get_aggregate_index(&aggregate, field_name.name.primary_name)
+                                    .get_aggregate_index(&aggregate, field_name.name.as_str())
                                 {
                                     None => Err(format!(
                                         "Unknown field name {} for struct ???",
-                                        field_name.name.primary_name
+                                        field_name.name.as_str()
                                     )),
                                     Some(field_idx) => {
                                         let field_type = context.aggregates[aggregate.0]
@@ -983,7 +985,7 @@ impl<'sc> FnCompiler {
     fn compile_array_expr(
         &mut self,
         context: &mut Context,
-        contents: Vec<TypedExpression<'sc>>,
+        contents: Vec<TypedExpression>,
     ) -> Result<Value, String> {
         if contents.is_empty() {
             return Err("Unable to create zero sized static arrays.".into());
@@ -1023,8 +1025,8 @@ impl<'sc> FnCompiler {
     fn compile_array_index(
         &mut self,
         context: &mut Context,
-        array_expr: TypedExpression<'sc>,
-        index_expr: TypedExpression<'sc>,
+        array_expr: TypedExpression,
+        index_expr: TypedExpression,
     ) -> Result<Value, String> {
         let array_val = self.compile_expression(context, array_expr)?;
         let aggregate = match &context.values[array_val.0] {
@@ -1071,7 +1073,7 @@ impl<'sc> FnCompiler {
         &mut self,
         context: &mut Context,
         struct_name: &str,
-        fields: Vec<TypedStructExpressionField<'sc>>,
+        fields: Vec<TypedStructExpressionField>,
     ) -> Result<Value, String> {
         let aggregate = context
             .get_aggregate_by_name(struct_name)
@@ -1081,7 +1083,7 @@ impl<'sc> FnCompiler {
         let inserted_values_indices = fields
             .into_iter()
             .map(|field_value| {
-                let name = field_value.name.primary_name;
+                let name = field_value.name.as_str();
                 self.compile_expression(context, field_value.value)
                     .and_then(|insert_val| {
                         context
@@ -1114,7 +1116,7 @@ impl<'sc> FnCompiler {
     fn compile_struct_field_expr(
         &mut self,
         context: &mut Context,
-        ast_struct_expr: TypedExpression<'sc>,
+        ast_struct_expr: TypedExpression,
         ast_field: OwnedTypedStructField,
         _ast_parent_type: TypeId,
     ) -> Result<Value, String> {
@@ -1153,7 +1155,7 @@ impl<'sc> FnCompiler {
         context: &mut Context,
         enum_decl: TypedEnumDeclaration,
         tag: usize,
-        contents: Option<Box<TypedExpression<'sc>>>,
+        contents: Option<Box<TypedExpression>>,
     ) -> Result<Value, String> {
         // XXX The enum instantiation AST node includes the full declaration.  If the enum was
         // declared in a different module then it seems for now there's no easy way to pre-analyse
@@ -1161,7 +1163,7 @@ impl<'sc> FnCompiler {
         // the name, and if not add a new aggregate... OTOH the naming seems a little fragile and
         // we could potentially use the wrong aggregate with the same name, different module...
         // dunno.
-        let aggregate = match context.get_aggregate_by_name(enum_decl.name.primary_name) {
+        let aggregate = match context.get_aggregate_by_name(enum_decl.name.as_str()) {
             Some(agg) => Ok(agg),
             None => compile_enum_decl(context, enum_decl),
         }?;
@@ -1194,9 +1196,9 @@ impl<'sc> FnCompiler {
     fn compile_asm_expr(
         &mut self,
         context: &mut Context,
-        registers: Vec<TypedAsmRegisterDeclaration<'sc>>,
-        body: Vec<AsmOp<'sc>>,
-        returns: Option<(AsmRegister, crate::Span<'sc>)>,
+        registers: Vec<TypedAsmRegisterDeclaration>,
+        body: Vec<AsmOp>,
+        returns: Option<(AsmRegister, crate::Span)>,
     ) -> Result<Value, String> {
         let registers = registers
             .into_iter()
@@ -1210,7 +1212,7 @@ impl<'sc> FnCompiler {
                         .map(|init_expr| self.compile_expression(context, init_expr))
                         .transpose()
                         .map(|init| AsmArg {
-                            name: (*name).into(),
+                            name: name.as_str().into(),
                             initializer: init,
                         })
                 },
@@ -1225,12 +1227,9 @@ impl<'sc> FnCompiler {
                      immediate,
                      ..
                  }| AsmInstruction {
-                    name: op_name.primary_name.to_owned(),
-                    args: op_args
-                        .iter()
-                        .map(|id| id.primary_name.to_owned())
-                        .collect(),
-                    immediate: immediate.as_ref().map(|id| id.primary_name.to_owned()),
+                    name: op_name.as_str().to_owned(),
+                    args: op_args.iter().map(|id| id.as_str().to_owned()).collect(),
+                    immediate: immediate.as_ref().map(|id| id.as_str().to_owned()),
                 },
             )
             .collect();
@@ -1244,13 +1243,13 @@ impl<'sc> FnCompiler {
 
 // -------------------------------------------------------------------------------------------------
 
-fn convert_literal_to_value<'sc>(context: &mut Context, ast_literal: &Literal<'sc>) -> Value {
+fn convert_literal_to_value(context: &mut Context, ast_literal: &Literal) -> Value {
     match ast_literal {
         Literal::U8(n) | Literal::Byte(n) => Constant::get_uint(context, 8, *n as u64),
         Literal::U16(n) => Constant::get_uint(context, 16, *n as u64),
         Literal::U32(n) => Constant::get_uint(context, 32, *n as u64),
         Literal::U64(n) => Constant::get_uint(context, 64, *n),
-        Literal::String(s) => Constant::get_string(context, (*s).to_owned()),
+        Literal::String(s) => Constant::get_string(context, s.as_str().to_owned()),
         Literal::Boolean(b) => Constant::get_bool(context, *b),
         Literal::B256(bs) => Constant::get_b256(context, *bs),
     }
@@ -1262,16 +1261,16 @@ fn convert_literal_to_constant(ast_literal: &Literal) -> Constant {
         Literal::U16(n) => Constant::new_uint(16, *n as u64),
         Literal::U32(n) => Constant::new_uint(32, *n as u64),
         Literal::U64(n) => Constant::new_uint(64, *n),
-        Literal::String(s) => Constant::new_string((*s).to_owned()),
+        Literal::String(s) => Constant::new_string(s.as_str().to_owned()),
         Literal::Boolean(b) => Constant::new_bool(*b),
         Literal::B256(bs) => Constant::new_b256(*bs),
     }
 }
 
-fn convert_resolved_typeid<'sc>(
+fn convert_resolved_typeid(
     context: &mut Context,
     ast_type: &TypeId,
-    span: &crate::Span<'sc>,
+    span: &crate::Span,
 ) -> Result<Type, String> {
     // There's probably a better way to convert TypeError to String, but... we'll use something
     // other than String eventually?  IrError?
@@ -1286,7 +1285,7 @@ fn convert_resolved_typeid_no_span(
     ast_type: &TypeId,
 ) -> Result<Type, String> {
     let span = crate::span::Span {
-        span: pest::Span::new(" ", 0, 0).unwrap(),
+        span: pest::Span::new(" ".into(), 0, 0).unwrap(),
         path: None,
     };
     convert_resolved_typeid(context, ast_type, &span)
@@ -1305,7 +1304,6 @@ fn convert_resolved_type(context: &mut Context, ast_type: &TypeInfo) -> Result<T
             Type::Uint(nbits)
         }
         TypeInfo::Boolean => Type::Bool,
-        TypeInfo::Unit => Type::Unit,
         TypeInfo::Byte => Type::Uint(8), // XXX?
         TypeInfo::B256 => Type::B256,
         TypeInfo::Str(n) => Type::String(*n),
@@ -1319,17 +1317,29 @@ fn convert_resolved_type(context: &mut Context, ast_type: &TypeInfo) -> Result<T
         TypeInfo::Enum {
             name,
             variant_types,
-        } => match context.get_aggregate_by_name(name) {
-            Some(existing_aggregate) => Type::Struct(existing_aggregate),
-            None => {
-                // Let's create a new aggregate from the TypeInfo.
-                create_enum_aggregate(context, name.clone(), variant_types.clone())
-                    .map(&Type::Struct)?
+        } => {
+            match context.get_aggregate_by_name(name) {
+                Some(existing_aggregate) => Type::Struct(existing_aggregate),
+                None => {
+                    // Let's create a new aggregate from the TypeInfo.
+                    create_enum_aggregate(context, name.clone(), variant_types.clone())
+                        .map(&Type::Struct)?
+                }
             }
-        },
+        }
         TypeInfo::Array(elem_type_id, count) => {
             let elem_type = convert_resolved_typeid_no_span(context, elem_type_id)?;
             Type::Array(Aggregate::new_array(context, elem_type, *count as u64))
+        }
+        TypeInfo::Tuple(ids) => {
+            if ids.is_empty() {
+                // XXX We've removed Unit from the core compiler, replaced with an empty Tuple.
+                // Perhaps the same should be done for the IR, although it would use an empty
+                // aggregate which might not make as much sense as a dedicated Unit type.
+                Type::Unit
+            } else {
+                return Err("can't do tuples yet".into());
+            }
         }
         TypeInfo::Custom { .. } => return Err("can't do custom types yet".into()),
         TypeInfo::SelfType { .. } => return Err("can't do self types yet".into()),
@@ -1454,7 +1464,8 @@ mod tests {
     // -------------------------------------------------------------------------------------------------
 
     fn parse_to_typed_ast(input: &str) -> TypedParseTree {
-        let mut parsed = HllParser::parse(Rule::program, input).expect("parse_tree");
+        let mut parsed =
+            HllParser::parse(Rule::program, std::sync::Arc::from(input)).expect("parse_tree");
 
         let mut warnings = vec![];
         let mut errors = vec![];

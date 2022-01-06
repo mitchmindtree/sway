@@ -409,10 +409,10 @@ pub fn compile_to_asm(
 use sway_ir::{context::Context, function::Function};
 
 pub(crate) fn compile_ast_to_ir_to_asm<'sc>(
-    ast: TypedParseTree<'sc>,
-    tree_type: TreeType<'sc>,
+    ast: TypedParseTree,
+    tree_type: TreeType,
     build_config: &BuildConfig,
-) -> CompileResult<'sc, FinalizedAsm<'sc>> {
+) -> CompileResult<FinalizedAsm> {
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
@@ -422,7 +422,7 @@ pub(crate) fn compile_ast_to_ir_to_asm<'sc>(
             errors.push(CompileError::InternalOwned(
                 msg,
                 crate::span::Span {
-                    span: pest::Span::new(" ", 0, 0).unwrap(),
+                    span: pest::Span::new(" ".into(), 0, 0).unwrap(),
                     path: None,
                 },
             ));
@@ -455,7 +455,7 @@ pub(crate) fn compile_ast_to_ir_to_asm<'sc>(
     crate::asm_generation::from_ir::compile_ir_to_asm(&ir, build_config)
 }
 
-fn inline_function_calls<'sc>(ir: &mut Context, functions: &[Function]) -> CompileResult<'sc, ()> {
+fn inline_function_calls<'sc>(ir: &mut Context, functions: &[Function]) -> CompileResult<()> {
     for function in functions {
         if let Err(msg) = sway_ir::optimize::inline_all_function_calls(ir, function) {
             return err(
@@ -463,7 +463,7 @@ fn inline_function_calls<'sc>(ir: &mut Context, functions: &[Function]) -> Compi
                 vec![CompileError::InternalOwned(
                     msg,
                     Span {
-                        span: pest::Span::new("", 0, 0).unwrap(),
+                        span: pest::Span::new("".into(), 0, 0).unwrap(),
                         path: None,
                     },
                 )],
