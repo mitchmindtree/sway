@@ -80,7 +80,19 @@ pub struct SourceGit {
     /// The URL at which the repository is located.
     pub repo: Url,
     /// A git reference, e.g. a branch or tag.
-    pub reference: String,
+    pub reference: GitReference,
+}
+
+/// Used to distinguish between types of git references.
+///
+/// For the most part, `GitReference` is useful to refine the `refspecs` used to fetch remote
+/// repositories.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+pub enum GitReference {
+    Branch(String),
+    Tag(String),
+    Rev(String),
+    Default,
 }
 
 /// A package from the official registry.
@@ -371,6 +383,12 @@ impl FromStr for SourceGitPinned {
     }
 }
 
+impl Default for GitReference {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 /// The `pkg::Graph` is of *a -> b* where *a* depends on *b*. We can determine compilation order by
 /// performing a toposort of the graph with reversed weights. The resulting order ensures all
 /// dependencies are always compiled before their dependents.
@@ -591,6 +609,71 @@ fn hash_url(url: &Url) -> u64 {
 fn tmp_git_repo_dir(fetch_id: u64, name: &str, repo: &Url) -> PathBuf {
     let repo_dir_name = format!("{:x}-{}", fetch_id, git_repo_dir_name(name, repo));
     git_checkouts_directory().join("tmp").join(repo_dir_name)
+}
+
+// // Given a git reference, build a list of `refspecs` required for the fetch opration.
+// fn git_ref_to_refspecs(reference: &str) -> Vec<String> {
+//     let mut refspecs = vec![];
+//     // In case the reference is a branch we need this:
+//     refspecs.push(format!("+refs/heads/{0}:refs/remotes/origin/{0}", reference));
+//     // In case the reference is a
+//
+// }
+//
+//     // Translate the reference desired here into an actual list of refspecs
+//     // which need to get fetched. Additionally record if we're fetching tags.
+//     let mut refspecs = Vec::new();
+//     let mut tags = false;
+//     // The `+` symbol on the refspec means to allow a forced (fast-forward)
+//     // update which is needed if there is ever a force push that requires a
+//     // fast-forward.
+//     match reference {
+//         // For branches and tags we can fetch simply one reference and copy it
+//         // locally, no need to fetch other branches/tags.
+//         GitReference::Branch(b) => {
+//             refspecs.push(format!("+refs/heads/{0}:refs/remotes/origin/{0}", b));
+//         }
+//         GitReference::Tag(t) => {
+//             refspecs.push(format!("+refs/tags/{0}:refs/remotes/origin/tags/{0}", t));
+//         }
+//
+//         GitReference::DefaultBranch => {
+//             refspecs.push(String::from("+HEAD:refs/remotes/origin/HEAD"));
+//         }
+//
+//         GitReference::Rev(rev) => {
+//             if rev.starts_with("refs/") {
+//                 refspecs.push(format!("+{0}:{0}", rev));
+//             } else {
+//                 // We don't know what the rev will point to. To handle this
+//                 // situation we fetch all branches and tags, and then we pray
+//                 // it's somewhere in there.
+//                 refspecs.push(String::from("+refs/heads/*:refs/remotes/origin/*"));
+//                 refspecs.push(String::from("+HEAD:refs/remotes/origin/HEAD"));
+//                 tags = true;
+//             }
+//         }
+//     }
+
+/// Initializes a temporary git repo for the package and fetches only the reference associated with
+/// the given source.
+fn with_tmp_git_repo<F, O>(fetch_id: u64, name: &str, source: &SourceGit, f: F) -> Result<O>
+where
+    F: FnOnce(git2::Repository) -> Result<O>,
+{
+    // Clear existing temporary directory if it exists.
+    let repo_dir = tmp_git_repo_dir(fetch_id, name, source);
+    if repo_dir.exists() {
+        let _ = std::fs::remove_dir_all(&repo_dir);
+    }
+
+    // Initialise the repository.
+    let repo = git2::Repository::init(&repo_dir)
+        .map_err(|e| anyhow!("failed to init repo at \"{}\": {}", repo_dir, e))?;
+
+    // Fetch the reference.
+
+
 }
 
 /// Clones the package git repo into a temporary directory and applies the given function.
