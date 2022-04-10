@@ -618,7 +618,7 @@ impl TypedExpression {
     pub(crate) fn type_check_variable_expression(
         name: Ident,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
+        namespace: &Namespace,
     ) -> CompileResult<TypedExpression> {
         let mut errors = vec![];
         let exp = match namespace.get_symbol(&name).value {
@@ -786,8 +786,8 @@ impl TypedExpression {
     fn type_check_code_block(
         contents: CodeBlock,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         type_annotation: TypeId,
         help_text: &'static str,
         self_type: TypeId,
@@ -901,7 +901,7 @@ impl TypedExpression {
         ));
         // put the variable and type of the enum variants inner type into the namespace for the
         // "then" branch but not the else branch
-        let then_branch_scope = create_new_scope(namespace);
+        let mut then_branch_scope = namespace.clone();
         // calculate the return type of the variable by checking the enum variant's return type
 
         then_branch_scope.insert(
@@ -926,7 +926,7 @@ impl TypedExpression {
         let (then, then_branch_code_block_return_type) = check!(
             TypedCodeBlock::type_check(TypeCheckArguments {
                 checkee: then,
-                namespace: then_branch_scope,
+                namespace: &mut then_branch_scope,
                 crate_namespace,
                 return_type_annotation: insert_type(TypeInfo::Unknown),
                 help_text: "Because the return value of this expression is used, all branches of `if let` expression must return this type",
@@ -1248,8 +1248,8 @@ impl TypedExpression {
     fn type_check_asm_expression(
         asm: AsmExpression,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -1317,8 +1317,8 @@ impl TypedExpression {
         call_path: CallPath,
         type_arguments: Vec<TypeArgument>,
         fields: Vec<StructExpressionField>,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -1327,7 +1327,7 @@ impl TypedExpression {
         let mut warnings = vec![];
         let mut errors = vec![];
         let mut typed_fields_buf = vec![];
-        let module = check!(
+        let mut module = check!(
             namespace.find_module_relative(&call_path.prefixes),
             return err(warnings, errors),
             warnings,
@@ -1385,7 +1385,7 @@ impl TypedExpression {
                     );
                 }
                 check!(
-                    decl.monomorphize(&module, &type_arguments, Some(self_type)),
+                    decl.monomorphize(&mut module, &type_arguments, Some(self_type)),
                     return err(warnings, errors),
                     warnings,
                     errors
@@ -1471,8 +1471,8 @@ impl TypedExpression {
         prefix: Box<Expression>,
         span: Span,
         field_to_access: Ident,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -1542,8 +1542,8 @@ impl TypedExpression {
     fn type_check_tuple(
         fields: Vec<Expression>,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         type_annotation: TypeId,
         self_type: TypeId,
         build_config: &BuildConfig,
@@ -1651,8 +1651,8 @@ impl TypedExpression {
         index: usize,
         index_span: Span,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -1720,8 +1720,8 @@ impl TypedExpression {
         span: Span,
         args: Vec<Expression>,
         type_arguments: Vec<TypeArgument>,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -1747,7 +1747,8 @@ impl TypedExpression {
             let enum_name = enum_name[0].clone();
             let namespace = namespace.find_module_relative(module_path);
             let namespace = namespace.ok(&mut warnings, &mut errors);
-            let enum_module_combined_result = namespace.and_then(|ns| ns.find_enum(&enum_name));
+            let enum_module_combined_result =
+                namespace.as_ref().and_then(|ns| ns.find_enum(&enum_name));
             (enum_module_combined_result, namespace)
         };
 
@@ -1759,12 +1760,12 @@ impl TypedExpression {
                 errors.push(CompileError::AmbiguousPath { span });
                 return err(warnings, errors);
             }
-            (Some(module), None) => match module.get_symbol(&call_path.suffix).value {
+            (Some(mut module), None) => match module.get_symbol(&call_path.suffix).value {
                 Some(decl) => match decl {
                     TypedDeclaration::EnumDeclaration(enum_decl) => {
                         check!(
                             instantiate_enum(
-                                module,
+                                &mut module,
                                 enum_decl,
                                 call_path.suffix,
                                 args,
@@ -1815,24 +1816,27 @@ impl TypedExpression {
                     return err(warnings, errors);
                 }
             },
-            (None, Some(enum_decl)) => check!(
-                instantiate_enum(
-                    enum_module_combined_result_module.unwrap(),
-                    enum_decl,
-                    call_path.suffix,
-                    args,
-                    type_arguments,
-                    namespace,
-                    crate_namespace,
-                    self_type,
-                    build_config,
-                    dead_code_graph,
-                    opts,
-                ),
-                return err(warnings, errors),
-                warnings,
-                errors
-            ),
+            (None, Some(enum_decl)) => {
+                let mut module = enum_module_combined_result_module.unwrap();
+                check!(
+                    instantiate_enum(
+                        &mut module,
+                        enum_decl,
+                        call_path.suffix,
+                        args,
+                        type_arguments,
+                        namespace,
+                        crate_namespace,
+                        self_type,
+                        build_config,
+                        dead_code_graph,
+                        opts,
+                    ),
+                    return err(warnings, errors),
+                    warnings,
+                    errors
+                )
+            }
             (None, None) => {
                 errors.push(CompileError::SymbolNotFound {
                     name: call_path.suffix.as_str().to_string(),
@@ -1850,8 +1854,8 @@ impl TypedExpression {
         abi_name: CallPath,
         address: Box<Expression>,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -2007,8 +2011,8 @@ impl TypedExpression {
     fn type_check_array(
         contents: Vec<Expression>,
         span: Span,
-        namespace: crate::semantic_analysis::NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -2202,8 +2206,8 @@ impl TypedExpression {
     fn type_check_delayed_resolution(
         variant: DelayedResolutionVariant,
         span: Span,
-        namespace: NamespaceRef,
-        crate_namespace: NamespaceRef,
+        namespace: &mut Namespace,
+        crate_namespace: &Namespace,
         self_type: TypeId,
         build_config: &BuildConfig,
         dead_code_graph: &mut ControlFlowGraph,
@@ -2522,7 +2526,7 @@ impl TypedExpression {
 
 fn check_scrutinee_type(
     scrutinee: &Scrutinee,
-    namespace: NamespaceRef,
+    namespace: &mut Namespace,
 ) -> CompileResult<(TypeId, TypedEnumVariant)> {
     let mut warnings = vec![];
     let mut errors = vec![];
@@ -2547,7 +2551,7 @@ fn check_scrutinee_type(
 
 fn check_enum_scrutinee_type(
     call_path: &CallPath,
-    namespace: NamespaceRef,
+    namespace: &mut Namespace,
 ) -> CompileResult<(TypedEnumDeclaration, TypedEnumVariant)> {
     let mut warnings = vec![];
     let mut errors = vec![];
@@ -2569,7 +2573,7 @@ fn check_enum_scrutinee_type(
         }
     };
     let enum_decl = if !enum_decl.type_parameters.is_empty() {
-        enum_decl.monomorphize(&namespace)
+        enum_decl.monomorphize(namespace)
     } else {
         enum_decl
     };
@@ -2599,7 +2603,8 @@ mod tests {
     use super::*;
 
     fn do_type_check(expr: Expression, type_annotation: TypeId) -> CompileResult<TypedExpression> {
-        let namespace = create_module();
+        let mut namespace = Namespace::default();
+        let root_namespace = Namespace::default();
         let self_type = insert_type(TypeInfo::Unknown);
         let build_config = BuildConfig {
             file_name: Arc::new("test.sw".into()),
@@ -2615,8 +2620,8 @@ mod tests {
 
         TypedExpression::type_check(TypeCheckArguments {
             checkee: expr,
-            namespace,
-            crate_namespace: namespace,
+            namespace: &mut namespace,
+            crate_namespace: &root_namespace,
             return_type_annotation: type_annotation,
             help_text: Default::default(),
             self_type,

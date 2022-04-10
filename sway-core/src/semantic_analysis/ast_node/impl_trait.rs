@@ -14,8 +14,8 @@ use sway_types::span::Span;
 
 pub(crate) fn implementation_of_trait(
     impl_trait: ImplTrait,
-    namespace: crate::semantic_analysis::NamespaceRef,
-    crate_namespace: NamespaceRef,
+    namespace: &mut Namespace,
+    crate_namespace: &Namespace,
     build_config: &BuildConfig,
     dead_code_graph: &mut ControlFlowGraph,
     opts: TCOpts,
@@ -179,8 +179,8 @@ fn type_check_trait_implementation(
     functions: &[FunctionDeclaration],
     methods: &[FunctionDeclaration],
     trait_name: &Ident,
-    namespace: NamespaceRef,
-    crate_namespace: NamespaceRef,
+    namespace: &mut Namespace,
+    crate_namespace: &Namespace,
     _self_type: TypeId,
     build_config: &BuildConfig,
     dead_code_graph: &mut ControlFlowGraph,
@@ -328,7 +328,7 @@ fn type_check_trait_implementation(
 
     // this name space is temporary! It is used only so that the below methods
     // can reference functions from the interface
-    let local_namespace: NamespaceRef = create_new_scope(namespace);
+    let mut local_namespace = Namespace::default();
     local_namespace.insert_trait_implementation(
         CallPath {
             prefixes: vec![],
@@ -353,7 +353,7 @@ fn type_check_trait_implementation(
         let method = check!(
             TypedFunctionDeclaration::type_check(TypeCheckArguments {
                 checkee: method.clone(),
-                namespace: local_namespace,
+                namespace: &mut local_namespace,
                 crate_namespace,
                 return_type_annotation: insert_type(TypeInfo::Unknown),
                 help_text: Default::default(),
