@@ -150,8 +150,8 @@ impl Namespace {
         ok((), warnings, errors)
     }
 
-    pub fn insert_module(&mut self, module_name: String, ix: Namespace) {
-        self.modules.insert(module_name, ix);
+    pub fn insert_module(&mut self, module_name: String, module: Namespace) {
+        self.modules.insert(module_name, module);
     }
 
     pub(crate) fn get_methods_for_type(&self, r#type: TypeId) -> Vec<TypedFunctionDeclaration> {
@@ -242,8 +242,8 @@ impl Namespace {
             warnings,
             errors
         );
-        match module.symbols.get(name).cloned() {
-            Some(decl) => ok(decl, warnings, errors),
+        match module.symbols.get(name) {
+            Some(decl) => ok(decl.clone(), warnings, errors),
             None => {
                 errors.push(CompileError::SymbolNotFound {
                     name: name.as_str().to_string(),
@@ -310,8 +310,7 @@ impl Namespace {
                 let mut new_type_arguments = vec![];
                 for type_argument in type_arguments.into_iter() {
                     let new_type_id = check!(
-                        Self::resolve_type_with_self(
-                            self,
+                        self.resolve_type_with_self(
                             look_up_type_id(type_argument.type_id),
                             self_type,
                             type_argument.span.clone(),
@@ -407,8 +406,7 @@ impl Namespace {
                     let mut new_type_arguments = vec![];
                     for type_argument in type_arguments.into_iter() {
                         let new_type_id = check!(
-                            Self::resolve_type_without_self(
-                                self,
+                            self.resolve_type_without_self(
                                 &look_up_type_id(type_argument.type_id),
                             ),
                             insert_type(TypeInfo::ErrorRecovery),
@@ -437,8 +435,7 @@ impl Namespace {
                     let mut new_type_arguments = vec![];
                     for type_argument in type_arguments.into_iter() {
                         let new_type_id = check!(
-                            Self::resolve_type_without_self(
-                                self,
+                            self.resolve_type_without_self(
                                 &look_up_type_id(type_argument.type_id),
                             ),
                             insert_type(TypeInfo::ErrorRecovery),
