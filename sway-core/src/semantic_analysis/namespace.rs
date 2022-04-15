@@ -484,7 +484,7 @@ impl Namespace {
     ///
     /// This function will generate a missing method error if the method is not found.
     pub(crate) fn find_method_for_type(
-        &self,
+        &mut self,
         r#type: TypeId,
         method_name: &Ident,
         method_path: &[Ident],
@@ -494,11 +494,12 @@ impl Namespace {
     ) -> CompileResult<TypedFunctionDeclaration> {
         let mut warnings = vec![];
         let mut errors = vec![];
-        let base_module = from_module.unwrap_or(self);
-        let mut namespace = check!(
-            base_module
-                .find_module_relative(method_path)
-                .map(|ns| ns.clone()),
+        // TODO: We likely want to use `from_module` directly here but don't have `&mut` access.
+        let mut from_module = from_module.cloned();
+        let local_methods = self.get_methods_for_type(r#type);
+        let base_module = from_module.as_mut().unwrap_or(self);
+        let namespace = check!(
+            base_module.find_module_relative_mut(method_path),
             return err(warnings, errors),
             warnings,
             errors
@@ -517,7 +518,6 @@ impl Namespace {
             warnings,
             errors
         );
-        let local_methods = self.get_methods_for_type(r#type);
         let mut ns_methods = namespace.get_methods_for_type(r#type);
         let mut methods = local_methods;
         methods.append(&mut ns_methods);
