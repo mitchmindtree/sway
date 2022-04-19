@@ -13,8 +13,9 @@ pub(crate) fn instantiate_enum(
     enum_field_name: Ident,
     args: Vec<Expression>,
     type_arguments: Vec<TypeArgument>,
-    namespace: &mut Namespace,
-    crate_namespace: &Namespace,
+    init: &Namespace,
+    root: &mut Namespace,
+    scope: &namespace::Path,
     self_type: TypeId,
     build_config: &BuildConfig,
     dead_code_graph: &mut ControlFlowGraph,
@@ -24,6 +25,7 @@ pub(crate) fn instantiate_enum(
     let mut warnings = vec![];
     let mut errors = vec![];
 
+    let namespace = &mut root[scope];
     let mut type_arguments = type_arguments;
     for type_argument in type_arguments.iter_mut() {
         type_argument.type_id = check!(
@@ -115,8 +117,9 @@ pub(crate) fn instantiate_enum(
             let typed_expr = check!(
                 TypedExpression::type_check(TypeCheckArguments {
                     checkee: single_expr.clone(),
-                    namespace,
-                    crate_namespace,
+                    init,
+                    root,
+                    scope,
                     return_type_annotation: enum_field_type,
                     help_text: "Enum instantiator must match its declared variant type.",
                     self_type,

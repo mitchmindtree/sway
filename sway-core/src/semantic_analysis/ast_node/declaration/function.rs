@@ -61,8 +61,9 @@ impl TypedFunctionDeclaration {
         let mut errors = Vec::new();
         let TypeCheckArguments {
             checkee: fn_decl,
-            namespace,
-            crate_namespace,
+            init,
+            root,
+            scope,
             self_type,
             build_config,
             dead_code_graph,
@@ -88,7 +89,8 @@ impl TypedFunctionDeclaration {
         let type_mapping = insert_type_parameters(&type_parameters);
 
         // insert parameters and generic type declarations into namespace
-        let mut namespace = namespace.clone();
+        let mut temp_root = root.clone();
+        let namespace = &mut temp_root[scope];
 
         // check to see if the type parameters shadow one another
         for type_parameter in type_parameters.iter() {
@@ -156,8 +158,9 @@ impl TypedFunctionDeclaration {
         let (mut body, _implicit_block_return) = check!(
             TypedCodeBlock::type_check(TypeCheckArguments {
                 checkee: body.clone(),
-                namespace: &mut namespace,
-                crate_namespace,
+                init,
+                root: &mut temp_root,
+                scope,
                 return_type_annotation: return_type,
                 help_text:
                     "Function body's return type does not match up with its return type annotation.",

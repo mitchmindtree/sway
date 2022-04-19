@@ -26,6 +26,9 @@ type ModuleMap = im::OrdMap<ModuleName, Namespace>;
 type UseSynonyms = im::HashMap<Ident, Vec<Ident>>;
 type UseAliases = im::HashMap<String, Ident>;
 
+pub type Path = [Ident];
+pub type PathBuf = Vec<Ident>;
+
 /// A namespace represents all items that exist either within some lexical scope via declaration or
 /// importing.
 ///
@@ -214,15 +217,20 @@ impl Namespace {
     /// `foo::bar::function`
     ///
     /// where `foo` and `bar` are the prefixes and `function` is the suffix.
-    pub(crate) fn get_call_path(&self, symbol: &CallPath) -> CompileResult<TypedDeclaration> {
+    ///
+    /// The given `mod_path` is a path to the module in which we're retrieving the symbol. If the
+    /// call path has no prefix path, we look up the synonym within the given module to find the
+    /// symbol's absolute path that we can use with `self`.
+    pub(crate) fn get_call_path(&self, mod_path: &Path, symbol: &CallPath) -> CompileResult<TypedDeclaration> {
         let path = if symbol.prefixes.is_empty() {
-            self.use_synonyms
+            self[mod_path].use_synonyms
                 .get(&symbol.suffix)
                 .unwrap_or(&symbol.prefixes)
         } else {
             &symbol.prefixes
         };
-        self.get_name_from_path(path, &symbol.suffix)
+        println!("get_name_from_path: {:?} {:?}", path.iter().map(|i| i.as_str()).collect::<Vec<_>>(), symbol.suffix.as_str());
+        self[mod_path].get_name_from_path(path, &symbol.suffix)
     }
 
     pub(crate) fn get_canonical_path(&self, symbol: &Ident) -> &[Ident] {
@@ -262,6 +270,7 @@ impl Namespace {
             match mod_ns.modules.get(ident.as_str()) {
                 Some(ns) => mod_ns = ns,
                 None => {
+                    println!("  {:?} not found", path.iter().map(|i| i.as_str()).collect::<Vec<_>>());
                     errors.push(module_not_found(path));
                     return err(warnings, errors);
                 }
@@ -281,6 +290,7 @@ impl Namespace {
             match mod_ns.modules.get_mut(ident.as_str()) {
                 Some(ns) => mod_ns = ns,
                 None => {
+                    println!("  {:?} not found", path.iter().map(|i| i.as_str()).collect::<Vec<_>>());
                     errors.push(module_not_found(path));
                     return err(warnings, errors);
                 }
@@ -483,20 +493,17 @@ impl Namespace {
     pub(crate) fn find_method_for_type(
         &mut self,
         r#type: TypeId,
-        method_name: &Ident,
-        method_path: &[Ident],
-        from_module: Option<&Namespace>,
+        method_path: &Path,
         self_type: TypeId,
         args_buf: &VecDeque<TypedExpression>,
     ) -> CompileResult<TypedFunctionDeclaration> {
         let mut warnings = vec![];
         let mut errors = vec![];
-        // TODO: We likely want to use `from_module` directly here but don't have `&mut` access.
-        let mut from_module = from_module.cloned();
+
         let local_methods = self.get_methods_for_type(r#type);
-        let base_module = from_module.as_mut().unwrap_or(self);
+        let (method_name, method_prefix) = method_path.split_last().expect("method path is empty");
         let namespace = check!(
-            base_module.find_module_relative_mut(method_path),
+            self.find_module_relative_mut(method_prefix),
             return err(warnings, errors),
             warnings,
             errors
@@ -680,26 +687,21 @@ impl Namespace {
         }
     }
 
-    /// Given a path to a module, create synonyms to every symbol in that module.
+    /// Given a path to a `src` module, create synonyms to every symbol in that module to the given
+    /// `dst` module.
+    ///
     /// This is used when an import path contains an asterisk.
-    pub(crate) fn star_import(
-        &mut self,
-        from_module: Option<&Namespace>,
-        path: Vec<Ident>,
-    ) -> CompileResult<()> {
+    pub(crate) fn star_import(&mut self, src: &Path, dst: &Path) -> CompileResult<()> {
         let mut warnings = vec![];
         let mut errors = vec![];
-        let namespace = {
-            let base_namespace = from_module.unwrap_or(self);
-            check!(
-                base_namespace.find_module_relative(&path),
-                return err(warnings, errors),
-                warnings,
-                errors
-            )
-        };
-        let implemented_traits = namespace.implemented_traits.clone();
-        let symbols = namespace
+        let src_ns = check!(
+            self.find_module_relative(src),
+            return err(warnings, errors),
+            warnings,
+            errors
+        );
+        let implemented_traits = src_ns.implemented_traits.clone();
+        let symbols = src_ns
             .symbols
             .iter()
             .filter_map(|(symbol, decl)| {
@@ -711,59 +713,55 @@ impl Namespace {
             })
             .collect::<Vec<_>>();
 
+        let dst_ns = &mut self[dst];
         check!(
-            self.implemented_traits.extend(implemented_traits),
+            dst_ns.implemented_traits.extend(implemented_traits),
             (),
             warnings,
             errors
         );
         for symbol in symbols {
-            if self.use_synonyms.contains_key(&symbol) {
+            if dst_ns.use_synonyms.contains_key(&symbol) {
                 errors.push(CompileError::StarImportShadowsOtherSymbol {
                     name: symbol.as_str().to_string(),
                     span: symbol.span().clone(),
                 });
             }
-            self.use_synonyms.insert(symbol, path.clone());
+            dst_ns.use_synonyms.insert(symbol, src.to_vec());
         }
         ok((), warnings, errors)
     }
 
-    /// Pull a single item from a module and import it into this namespace.
+    /// Pull a single item from a `src` module and import it into the `dst` module.
     ///
     /// The item we want to import is basically the last item in path because this is a self
     /// import.
-    pub(crate) fn self_import(
-        &mut self,
-        from_namespace: Option<&Namespace>,
-        path: Vec<Ident>,
-        alias: Option<Ident>,
-    ) -> CompileResult<()> {
-        let mut new_path = path;
-        let last_item = new_path.pop().expect("guaranteed by grammar");
-        self.item_import(from_namespace, new_path, &last_item, alias)
+    pub(crate) fn self_import(&mut self, src: &Path, dst: &Path, alias: Option<Ident>) -> CompileResult<()> {
+        let last_item = src.last().expect("guaranteed by grammar");
+        self.item_import(src, last_item, dst, alias)
     }
 
-    /// Pull a single item from a module and import it into this namespace.
+    /// Pull a single `item` from the given `src` module and import it into the `dst` module.
+    ///
+    /// Paths are assumed to be relative to `self`.
     pub(crate) fn item_import(
         &mut self,
-        from_namespace: Option<&Namespace>,
-        path: Vec<Ident>,
+        src: &Path,
         item: &Ident,
+        dst: &Path,
         alias: Option<Ident>,
     ) -> CompileResult<()> {
         let mut warnings = vec![];
         let mut errors = vec![];
-        let base_namespace = from_namespace.unwrap_or(self);
-        let namespace = check!(
-            base_namespace.find_module_relative(&path),
+        let src_ns = check!(
+            self.find_module_relative(&src),
             return err(warnings, errors),
             warnings,
             errors
         );
         let mut impls_to_insert = vec![];
 
-        match namespace.symbols.get(item).cloned() {
+        match src_ns.symbols.get(item).cloned() {
             Some(decl) => {
                 if decl.visibility() != Visibility::Public {
                     errors.push(CompileError::ImportPrivateSymbol {
@@ -778,39 +776,40 @@ impl Namespace {
                     ..
                 }) = decl
                 {
-                    self.insert(alias.unwrap_or_else(|| name.clone()), decl.clone());
+                    self[dst].insert(alias.unwrap_or_else(|| name.clone()), decl.clone());
                     return ok((), warnings, errors);
                 }
                 let a = decl.return_type().value;
                 //  if this is an enum or struct, import its implementations
                 let mut res = match a {
-                    Some(a) => namespace
+                    Some(a) => src_ns
                         .implemented_traits
                         .get_call_path_and_type_info(look_up_type_id(a)),
                     None => vec![],
                 };
                 impls_to_insert.append(&mut res);
                 // no matter what, import it this way though.
+                let dst_ns = &mut self[dst];
                 match alias {
                     Some(alias) => {
-                        if self.use_synonyms.contains_key(&alias) {
+                        if dst_ns.use_synonyms.contains_key(&alias) {
                             errors.push(CompileError::ShadowsOtherSymbol {
                                 name: alias.as_str().to_string(),
                                 span: alias.span().clone(),
                             });
                         }
-                        self.use_synonyms.insert(alias.clone(), path.clone());
-                        self.use_aliases
+                        dst_ns.use_synonyms.insert(alias.clone(), src.to_vec());
+                        dst_ns.use_aliases
                             .insert(alias.as_str().to_string(), item.clone());
                     }
                     None => {
-                        if self.use_synonyms.contains_key(item) {
+                        if dst_ns.use_synonyms.contains_key(item) {
                             errors.push(CompileError::ShadowsOtherSymbol {
                                 name: item.as_str().to_string(),
                                 span: item.span().clone(),
                             });
                         }
-                        self.use_synonyms.insert(item.clone(), path.clone());
+                        dst_ns.use_synonyms.insert(item.clone(), src.to_vec());
                     }
                 };
             }
@@ -823,14 +822,43 @@ impl Namespace {
             }
         };
 
+        let dst_ns = &mut self[dst];
         impls_to_insert
             .into_iter()
             .for_each(|((call_path, type_info), methods)| {
-                self.implemented_traits
+                dst_ns
+                    .implemented_traits
                     .insert(call_path, type_info, methods);
             });
 
         ok((), warnings, errors)
+    }
+
+    /// Lookup the module at the given path.
+    pub fn module(&self, path: &Path) -> Option<&Namespace> {
+        self.find_module_relative(path)
+            .ok(&mut vec![], &mut vec![])
+    }
+
+    /// Unique access to the module at the given path.
+    pub fn module_mut(&mut self, path: &Path) -> Option<&mut Namespace> {
+        self.find_module_relative_mut(path)
+            .ok(&mut vec![], &mut vec![])
+    }
+}
+
+impl<'a> std::ops::Index<&'a Path> for Namespace {
+    type Output = Namespace;
+    fn index(&self, path: &'a Path) -> &Self::Output {
+        self.module(path)
+            .unwrap_or_else(|| panic!("no module for the given path {:?}", path))
+    }
+}
+
+impl<'a> std::ops::IndexMut<&'a Path> for Namespace {
+    fn index_mut(&mut self, path: &'a Path) -> &mut Self::Output {
+        self.module_mut(path)
+            .unwrap_or_else(|| panic!("no module for the given path {:?}", path))
     }
 }
 
